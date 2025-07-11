@@ -3,9 +3,9 @@ import cv2
 from tkinter import filedialog
 from tkinter import ttk
 from matplotlib import pyplot as plt
+# Add the missing import for FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from PIL import Image, ImageTk
-
-#testing
 
 class SpectrometerApp:
 
@@ -16,6 +16,7 @@ class SpectrometerApp:
         self.window.title("Spectrometer App")
         
         # Initialize calibration window references and calibration wavelength values
+        # We will store the Tkinter window, matplotlib fig, ax, canvas, and line reference here
         self.cal_windows = {} 
         self.cal_wl = {}
 
@@ -51,8 +52,8 @@ class SpectrometerApp:
         self.Generate_graph_btn = tk.Button(self.left_panel, text="Generate Graph", command=self.Generate_graph)
         self.Generate_graph_btn.pack(padx=5, pady=5)
 
-    # This is a popup window for now, but the graph should be generated onto the actual window
     def Generate_graph(self):
+        # This is a placeholder function from the original code
         self.message_win= tk.Toplevel(self.window)
         self.message_win.geometry("400x50")
         self.message_label = ttk.Label(self.message_win, text="N/A")
@@ -60,7 +61,7 @@ class SpectrometerApp:
 
     def Calibrate(self, calibration_index):
         """
-        Creates or raises a calibration window based on the calibration_index (1 or 2).
+        Creates or raises a calibration window and prepares the matplotlib environment for image display and dragging.
         """
         win_key = f'cal_win_{calibration_index}'
         title = f"Calibrate {calibration_index}"
@@ -82,58 +83,130 @@ class SpectrometerApp:
         cal_left_panel = ttk.LabelFrame(cal_win, text="Controls")
         cal_left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
 
-        # Right panel for the image display in the calibration window
+        # --- Matplotlib Integration Panel ---
         cal_graph_panel = ttk.LabelFrame(cal_win, text="Calibration Image")
         cal_graph_panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Create the label to display the image for calibration
-        cal_graph_label = tk.Label(cal_graph_panel)
-        cal_graph_label.pack(fill=tk.BOTH, expand=True)
+        # Create a matplotlib figure and axes
+        fig, ax = plt.subplots(figsize=(5, 5))
+        
+        ax.axis('off')
 
-        self.entry_label=tk.Label(cal_left_panel, text="Wavelegnth(nm)")
+        # Embed the matplotlib figure into the Tkinter window
+        canvas = FigureCanvasTkAgg(fig, master=cal_graph_panel)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        
+        # Store references to matplotlib objects in the calibration window data structure
+        self.cal_windows[win_key].fig = fig
+        self.cal_windows[win_key].ax = ax
+        self.cal_windows[win_key].canvas = canvas
+        
+        # Initialize references for the draggable line and dragging state
+        self.cal_windows[win_key].line = None
+        self.cal_windows[win_key].dragging = False
+
+        # --- Controls ---
+        self.entry_label=tk.Label(cal_left_panel, text="Wavelength (nm)")
         self.entry_label.pack(padx=5, pady=5)
         self.entry=tk.Entry(cal_left_panel)
         self.entry.pack(padx=5, pady=5)
 
-        # Button to upload image, passing the specific label to Upload_image
+        # Button to upload image, passing the specific window key
         self.Upload_image_btn = tk.Button(cal_left_panel, text="Upload Image", 
-                                          command=lambda: self.Upload_image(cal_graph_label))
+                                         command=lambda: self.Upload_image(win_key))
         self.Upload_image_btn.pack(padx=5, pady=5)
 
-
-    def Upload_image(self, target_label):
+    def Upload_image(self, win_key):
 
         file_path = filedialog.askopenfilename(
             title="Select an Image",
             filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*"), ("All files", "*.*")]
         )
 
-        if file_path:
-            # Load image using OpenCV
-            uploaded_image_cv = cv2.imread(file_path)
+        if not file_path:
+            return
 
-            if uploaded_image_cv is None:
-                return
+        # Load image using OpenCV
+        uploaded_image_cv = cv2.imread(file_path)
 
-            # Convert OpenCV image to PIL Image for Tkinter display
-            image_rgb = cv2.cvtColor(uploaded_image_cv, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(image_rgb)
+        if uploaded_image_cv is None:
+            return
 
-            # Resize image maintaining aspect ratio
-            pil_image.thumbnail((500, 500), Image.Resampling.LANCZOS)
+        # Convert OpenCV image to RGB for matplotlib display
+        image_rgb = cv2.cvtColor(uploaded_image_cv, cv2.COLOR_BGR2RGB)
+
+        # Get the axes and canvas for the current calibration window
+        cal_win_data = self.cal_windows[win_key]
+        ax = cal_win_data.ax
+        canvas = cal_win_data.canvas
+        
+        # Clear existing axes content and display the image
+        ax.cla() 
+        ax.imshow(image_rgb)
+        
+        # Ensure axes are off again after clearing (just in case)
+        ax.axis('off')
+
+        # Set aspect ratio to auto for correct image display
+        ax.set_aspect('auto')
+        
+        # --- Add Draggable Horizontal Line ---
+        
+        # We need the image dimensions to place the line initially
+        img_height, img_width = image_rgb.shape[:2]
+        
+        # Check if a line already exists for this window
+        if cal_win_data.line is None:
+            y_center = img_height / 2.0
             
-            tk_image = ImageTk.PhotoImage(pil_image)
+            # Create the horizontal line
+            line = ax.axhline(y=y_center, color='r', linestyle='-', linewidth=0.5)
+            cal_win_data.line = line
 
-            # Update the target label with the image
-            target_label.config(image=tk_image)
+            # Set up event handlers for dragging on the matplotlib canvas
+            canvas.mpl_connect('button_press_event', lambda event: self.on_press(event, win_key))
+            canvas.mpl_connect('button_release_event', lambda event: self.on_release(event, win_key))
+            canvas.mpl_connect('motion_notify_event', lambda event: self.on_motion(event, win_key))
+        else:
+            # If the line already exists, just make sure it's visible if the image changed
+            cal_win_data.line.set_visible(True)
+
+        # Redraw the canvas
+        canvas.draw()
+    
+    # --- Matplotlib Dragging Handlers ---
+
+    def on_press(self, event, win_key):
+        """Handles mouse button press event on the matplotlib canvas."""
+        cal_win_data = self.cal_windows[win_key]
+        line = cal_win_data.line
+        
+        if event.inaxes != cal_win_data.ax or line is None:
+            return
+        if line.contains(event)[0]:
+            cal_win_data.dragging = True
             
-            # Keep a reference to the PhotoImage object to prevent garbage collection
-            target_label.image = tk_image 
+    def on_release(self, event, win_key):
+        """Handles mouse button release event."""
+        cal_win_data = self.cal_windows[win_key]
+        cal_win_data.dragging = False
 
+    def on_motion(self, event, win_key):
+        """Handles mouse motion while dragging."""
+        cal_win_data = self.cal_windows[win_key]
+        line = cal_win_data.line
+        canvas = cal_win_data.canvas
+
+        if cal_win_data.dragging and event.inaxes == cal_win_data.ax:
+            new_y = event.ydata           
+            line.set_ydata([new_y, new_y]) 
+            
+            # Redraw the canvas to update the line position visually
+            canvas.draw()
+            
     def on_closing(self):
-        """
-        Handles the application closing event.
-        """
+        plt.close('all') 
         self.window.destroy() 
 
 if __name__ == "__main__":
