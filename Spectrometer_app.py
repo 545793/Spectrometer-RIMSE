@@ -5,6 +5,8 @@ from tkinter import ttk
 from matplotlib import pyplot as plt
 from PIL import Image, ImageTk
 
+#testing
+
 class SpectrometerApp:
 
     def __init__(self, window):
