@@ -15,10 +15,9 @@ class SpectrometerApp:
         self.window.geometry("800x800")
         self.window.title("Spectrometer App")
         
-        # Initialize calibration window references and calibration wavelength values
-        # We will store the Tkinter window, matplotlib fig, ax, canvas, and line reference here
-        self.cal_windows = {} 
+        self.cal_windows = {}
         self.cal_wl = {}
+        self.Actual_Image_Window = None
 
         # Now, set up the GUI
         self.GUI_setup()
@@ -49,6 +48,9 @@ class SpectrometerApp:
         self.Calibrate2_btn = tk.Button(self.left_panel, text="Calibrate 2", command=lambda: self.Calibrate(2))
         self.Calibrate2_btn.pack(padx=5, pady=5)
 
+        self.Upload_Actual_Image_btn = tk.Button(self.left_panel, text="Upload Image", command=lambda: self.Calibrate(3))
+        self.Upload_Actual_Image_btn.pack(padx=5, pady=5)
+
         self.Generate_graph_btn = tk.Button(self.left_panel, text="Generate Graph", command=self.Generate_graph)
         self.Generate_graph_btn.pack(padx=5, pady=5)
 
@@ -63,13 +65,15 @@ class SpectrometerApp:
         """
         Creates or raises a calibration window and prepares the matplotlib environment for image display and dragging.
         """
-        win_key = f'cal_win_{calibration_index}'
-        title = f"Calibrate {calibration_index}"
-
         # Check if the window already exists and is open
-        if win_key in self.cal_windows and self.cal_windows[win_key].winfo_exists():
-            self.cal_windows[win_key].lift()
+        if calibration_index in self.cal_windows and self.cal_windows[calibration_index].winfo_exists():
+            self.cal_windows[calibration_index].lift()
             return
+        
+        if calibration_index==3:
+            title="Upload Image"
+        else:
+            title=f'Calibrate {calibration_index}'
 
         # Create a new top-level window for calibration
         cal_win = tk.Toplevel(self.window)
@@ -77,14 +81,19 @@ class SpectrometerApp:
         cal_win.geometry("600x600")
         
         # Store the reference to the new window
-        self.cal_windows[win_key] = cal_win
+        self.cal_windows[calibration_index] = cal_win
 
         # Left panel for controls in the calibration window
         cal_left_panel = ttk.LabelFrame(cal_win, text="Controls")
         cal_left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
 
         # --- Matplotlib Integration Panel ---
-        cal_graph_panel = ttk.LabelFrame(cal_win, text="Calibration Image")
+        if calibration_index==3:
+            name='Image'
+        else:
+            name=f"Calibration Image {calibration_index}"
+
+        cal_graph_panel = ttk.LabelFrame(cal_win, text=name)
         cal_graph_panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # Create a matplotlib figure and axes
@@ -97,14 +106,15 @@ class SpectrometerApp:
         canvas_widget = canvas.get_tk_widget()
         canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
-        # Store references to matplotlib objects in the calibration window data structure
-        self.cal_windows[win_key].fig = fig
-        self.cal_windows[win_key].ax = ax
-        self.cal_windows[win_key].canvas = canvas
+        # Store references to matplotlib objects in the calibration window dictionary to make them accessible later
+        self.cal_windows[calibration_index].fig = fig
+        self.cal_windows[calibration_index].ax = ax
+        self.cal_windows[calibration_index].canvas = canvas
         
         # Initialize references for the draggable line and dragging state
-        self.cal_windows[win_key].line = None
-        self.cal_windows[win_key].dragging = False
+        if calibration_index==1 or calibration_index==2:
+            self.cal_windows[calibration_index].line = None
+            self.cal_windows[calibration_index].dragging = False
 
         # --- Controls ---
         self.entry_label=tk.Label(cal_left_panel, text="Wavelength (nm)")
@@ -114,18 +124,19 @@ class SpectrometerApp:
 
         # Button to upload image, passing the specific window key
         self.Upload_image_btn = tk.Button(cal_left_panel, text="Upload Image", 
-                                         command=lambda: self.Upload_image(win_key))
+                                         command=lambda: self.Upload_image(calibration_index))
         self.Upload_image_btn.pack(padx=5, pady=5)
 
-    def Upload_image(self, win_key):
-
+    def Upload_image(self, calibration_index):
+        
         file_path = filedialog.askopenfilename(
             title="Select an Image",
             filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*"), ("All files", "*.*")]
         )
-
         if not file_path:
             return
+        
+        self.cal_windows[calibration_index].lift()
 
         # Load image using OpenCV
         uploaded_image_cv = cv2.imread(file_path)
@@ -137,9 +148,8 @@ class SpectrometerApp:
         image_rgb = cv2.cvtColor(uploaded_image_cv, cv2.COLOR_BGR2RGB)
 
         # Get the axes and canvas for the current calibration window
-        cal_win_data = self.cal_windows[win_key]
-        ax = cal_win_data.ax
-        canvas = cal_win_data.canvas
+        ax = self.cal_windows[calibration_index].ax
+        canvas = self.cal_windows[calibration_index].canvas
         
         # Clear existing axes content and display the image
         ax.cla() 
@@ -153,57 +163,45 @@ class SpectrometerApp:
         
         # --- Add Draggable Horizontal Line ---
         
-        # We need the image dimensions to place the line initially
-        img_height, img_width = image_rgb.shape[:2]
-        
-        # Check if a line already exists for this window
-        if cal_win_data.line is None:
-            y_center = img_height / 2.0
-            
-            # Create the horizontal line
-            line = ax.axhline(y=y_center, color='r', linestyle='-', linewidth=0.5)
-            cal_win_data.line = line
+        if calibration_index==1 or calibration_index==2:
+            # Check if a line already exists for this window
+            if self.cal_windows[calibration_index].line is None:        
+                # Create the horizontal line
+                line = ax.axhline(y=image_rgb.shape[0] / 2.0, color='r', linestyle='-', linewidth=0.5)
+                self.cal_windows[calibration_index].line = line
 
-            # Set up event handlers for dragging on the matplotlib canvas
-            canvas.mpl_connect('button_press_event', lambda event: self.on_press(event, win_key))
-            canvas.mpl_connect('button_release_event', lambda event: self.on_release(event, win_key))
-            canvas.mpl_connect('motion_notify_event', lambda event: self.on_motion(event, win_key))
-        else:
-            # If the line already exists, just make sure it's visible if the image changed
-            cal_win_data.line.set_visible(True)
+                # Set up event handlers for dragging on the matplotlib canvas
+                canvas.mpl_connect('button_press_event', lambda event: self.on_press(event, calibration_index))
+                canvas.mpl_connect('button_release_event', lambda event: self.on_release(event, calibration_index))
+                canvas.mpl_connect('motion_notify_event', lambda event: self.on_motion(event, calibration_index))
+            else:
+                # If the line already exists, just make sure it's visible if the image changed
+                self.cal_windows[calibration_index].line.set_visible(True)
 
         # Redraw the canvas
         canvas.draw()
     
     # --- Matplotlib Dragging Handlers ---
 
-    def on_press(self, event, win_key):
+    def on_press(self, event, calibration_index):
         """Handles mouse button press event on the matplotlib canvas."""
-        cal_win_data = self.cal_windows[win_key]
-        line = cal_win_data.line
-        
-        if event.inaxes != cal_win_data.ax or line is None:
+        if event.inaxes != self.cal_windows[calibration_index].ax or self.cal_windows[calibration_index].line is None:
             return
-        if line.contains(event)[0]:
-            cal_win_data.dragging = True
+        if self.cal_windows[calibration_index].line.contains(event)[0]:
+            self.cal_windows[calibration_index].dragging = True
             
-    def on_release(self, event, win_key):
+    def on_release(self, event, calibration_index):
         """Handles mouse button release event."""
-        cal_win_data = self.cal_windows[win_key]
-        cal_win_data.dragging = False
+        self.cal_windows[calibration_index].dragging = False
 
-    def on_motion(self, event, win_key):
+    def on_motion(self, event, calibration_index):
         """Handles mouse motion while dragging."""
-        cal_win_data = self.cal_windows[win_key]
-        line = cal_win_data.line
-        canvas = cal_win_data.canvas
-
-        if cal_win_data.dragging and event.inaxes == cal_win_data.ax:
+        if self.cal_windows[calibration_index].dragging and event.inaxes == self.cal_windows[calibration_index].ax:
             new_y = event.ydata           
-            line.set_ydata([new_y, new_y]) 
+            self.cal_windows[calibration_index].line.set_ydata([new_y, new_y]) 
             
             # Redraw the canvas to update the line position visually
-            canvas.draw()
+            self.cal_windows[calibration_index].canvas.draw()
             
     def on_closing(self):
         plt.close('all') 
