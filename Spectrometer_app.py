@@ -3,132 +3,215 @@ import cv2
 from tkinter import filedialog
 from tkinter import ttk
 from matplotlib import pyplot as plt
-# Add the missing import for FigureCanvasTkAgg
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from PIL import Image, ImageTk
 
 class SpectrometerApp:
 
     def __init__(self, window):
-        
         self.window = window
         self.window.geometry("800x800")
         self.window.title("Spectrometer App")
         
-        self.cal_windows = {}
-        self.cal_wl = {}
-        self.Actual_Image_Window = None
+        self.roi_window = None
+        self.calibrate_window = None # This will now house two image panels
+        self.upload_image_window = None
 
-        # Now, set up the GUI
+        self.roi_rectangles = {}
+        self.roi_corrdinates = {}
+
         self.GUI_setup()
-        
-        # Initialize a dictionary to store references to labels in pop-up windows
-        self.popup_labels = {} 
 
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     # --- GUI Setup ---
     def GUI_setup(self):
-        # Left panel - Controls
         self.left_panel = ttk.LabelFrame(self.window, text="Controls")
         self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
 
-        # Right panel - video (Main window graph area)
-        self.main_graph_panel = ttk.LabelFrame(self.window, text= "Graph")
+        self.main_graph_panel = ttk.LabelFrame(self.window, text="Graph")
         self.main_graph_panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Create the label to display the graph in the main window
         self.main_graph_label = tk.Label(self.main_graph_panel)
         self.main_graph_label.pack(fill=tk.BOTH, expand=True)
 
-        # Calibration buttons now call the unified Calibrate function
-        self.Calibrate1_btn = tk.Button(self.left_panel, text="Calibrate 1", command=lambda: self.Calibrate(1))
-        self.Calibrate1_btn.pack(padx=5, pady=5)
+        self.Choose_ROI_btn = tk.Button(self.left_panel, text="Choose ROI", command=self.open_roi_window)
+        self.Choose_ROI_btn.pack(padx=5, pady=5)
 
-        self.Calibrate2_btn = tk.Button(self.left_panel, text="Calibrate 2", command=lambda: self.Calibrate(2))
-        self.Calibrate2_btn.pack(padx=5, pady=5)
+        self.Calibrate_btn = tk.Button(self.left_panel, text="Calibrate", command=self.open_calibrate_window)
+        self.Calibrate_btn.pack(padx=5, pady=5)
 
-        self.Upload_Actual_Image_btn = tk.Button(self.left_panel, text="Upload Image", command=lambda: self.Calibrate(3))
+        self.Upload_Actual_Image_btn = tk.Button(self.left_panel, text="Upload Image", command=self.open_upload_image_window)
         self.Upload_Actual_Image_btn.pack(padx=5, pady=5)
 
         self.Generate_graph_btn = tk.Button(self.left_panel, text="Generate Graph", command=self.Generate_graph)
         self.Generate_graph_btn.pack(padx=5, pady=5)
 
     def Generate_graph(self):
-        # This is a placeholder function from the original code
-        self.message_win= tk.Toplevel(self.window)
+        self.message_win = tk.Toplevel(self.window)
         self.message_win.geometry("400x50")
         self.message_label = ttk.Label(self.message_win, text="N/A")
         self.message_label.pack(pady=10)
 
-    def Calibrate(self, calibration_index):
+    def _create_basic_image_panel(self, parent_frame, panel_name, include_wavelength_entry=False):
         """
-        Creates or raises a calibration window and prepares the matplotlib environment for image display and dragging.
+        Creates and configures a single image display panel within a parent frame.
+        Returns the ax, canvas, line, and controls frame for that panel.
         """
-        # Check if the window already exists and is open
-        if calibration_index in self.cal_windows and self.cal_windows[calibration_index].winfo_exists():
-            self.cal_windows[calibration_index].lift()
-            return
-        
-        if calibration_index==3:
-            title="Upload Image"
-        else:
-            title=f'Calibrate {calibration_index}'
+        panel_container = ttk.Frame(parent_frame)
+        panel_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Create a new top-level window for calibration
-        cal_win = tk.Toplevel(self.window)
-        cal_win.title(title)
-        cal_win.geometry("600x600")
-        
-        # Store the reference to the new window
-        self.cal_windows[calibration_index] = cal_win
+        # Controls for this panel
+        controls_frame = ttk.LabelFrame(panel_container, text="Controls")
+        controls_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 
-        # Left panel for controls in the calibration window
-        cal_left_panel = ttk.LabelFrame(cal_win, text="Controls")
-        cal_left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        # Matplotlib Graph for this panel
+        graph_frame = ttk.LabelFrame(panel_container, text=f"Calibration Image - {panel_name}")
+        graph_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # --- Matplotlib Integration Panel ---
-        if calibration_index==3:
-            name='Image'
-        else:
-            name=f"Calibration Image {calibration_index}"
-
-        cal_graph_panel = ttk.LabelFrame(cal_win, text=name)
-        cal_graph_panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        # Create a matplotlib figure and axes
-        fig, ax = plt.subplots(figsize=(5, 5))
-        
+        fig, ax = plt.subplots(figsize=(4, 4)) # Adjust size for two panels
         ax.axis('off')
 
-        # Embed the matplotlib figure into the Tkinter window
+        canvas = FigureCanvasTkAgg(fig, master=graph_frame)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Store references on a panel-specific object or dict if needed,
+        # but for now, we'll return them and store on the main window's calibration window object.
+        
+        # Wavelength entry
+        entry = None
+        if include_wavelength_entry:
+            entry_label = tk.Label(controls_frame, text="Wavelength (nm)")
+            entry_label.pack(padx=5, pady=2)
+            entry = tk.Entry(controls_frame)
+            entry.pack(padx=5, pady=2)
+            
+        # Initialize line and dragging state for this panel
+        line = None
+        dragging = False
+
+        return {
+            'ax': ax, 
+            'canvas': canvas, 
+            'fig': fig, # Store fig for closing later if needed
+            'line': line, 
+            'dragging': dragging,
+            'wavelength_entry': entry,
+            'controls_frame': controls_frame # Return controls_frame to add upload button
+        }
+
+    def _setup_single_calibration_window(self, parent_win, title, graph_panel_name, include_wavelength_entry=False):
+        """
+        Helper to set up a single calibration window's content (for ROI and Upload Image).
+        """
+        cal_left_panel = ttk.LabelFrame(parent_win, text="Controls")
+        cal_left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        cal_graph_panel = ttk.LabelFrame(parent_win, text=graph_panel_name)
+        cal_graph_panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.axis('off')
+
         canvas = FigureCanvasTkAgg(fig, master=cal_graph_panel)
         canvas_widget = canvas.get_tk_widget()
         canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
-        # Store references to matplotlib objects in the calibration window dictionary to make them accessible later
-        self.cal_windows[calibration_index].fig = fig
-        self.cal_windows[calibration_index].ax = ax
-        self.cal_windows[calibration_index].canvas = canvas
+        parent_win.fig = fig
+        parent_win.ax = ax
+        parent_win.canvas = canvas
+
+        # Draggable line setup (only for Calibrate 2 and similar, but kept here for general template)
+        parent_win.line = None
+        parent_win.dragging = False
+
+        if include_wavelength_entry:
+            entry_label = tk.Label(cal_left_panel, text="Wavelength (nm)")
+            entry_label.pack(padx=5, pady=5)
+            entry = tk.Entry(cal_left_panel)
+            entry.pack(padx=5, pady=5)
+            parent_win.wavelength_entry = entry
+        else:
+            parent_win.wavelength_entry = None
+
+        return ax, canvas, cal_left_panel
+
+    def open_roi_window(self):
+        if self.roi_window and self.roi_window.winfo_exists():
+            self.roi_window.lift()
+            return
+
+        self.roi_window = tk.Toplevel(self.window)
+        self.roi_window.title("Choose Region of Interest")
+        self.roi_window.geometry("600x600")
+
+        ax, canvas, left_panel = self._setup_single_calibration_window(
+            self.roi_window, 
+            "Choose Region of Interest", 
+            "Drag Region of Interest",
+            include_wavelength_entry=False
+        )
         
-        # Initialize references for the draggable line and dragging state
-        if calibration_index==1 or calibration_index==2:
-            self.cal_windows[calibration_index].line = None
-            self.cal_windows[calibration_index].dragging = False
+        upload_btn = tk.Button(left_panel, text="Upload Image", 
+                               command=lambda: self.upload_image_to_panel(self.roi_window)) # Changed to panel for consistency
+        upload_btn.pack(padx=5, pady=5)
 
-        # --- Controls ---
-        self.entry_label=tk.Label(cal_left_panel, text="Wavelength (nm)")
-        self.entry_label.pack(padx=5, pady=5)
-        self.entry=tk.Entry(cal_left_panel)
-        self.entry.pack(padx=5, pady=5)
+    def open_calibrate_window(self):
+        if self.calibrate_window and self.calibrate_window.winfo_exists():
+            self.calibrate_window.lift()
+            return
 
-        # Button to upload image, passing the specific window key
-        self.Upload_image_btn = tk.Button(cal_left_panel, text="Upload Image", 
-                                         command=lambda: self.Upload_image(calibration_index))
-        self.Upload_image_btn.pack(padx=5, pady=5)
+        self.calibrate_window = tk.Toplevel(self.window)
+        self.calibrate_window.title("Calibrate 2")
+        self.calibrate_window.geometry("1200x600") # Wider for two images
 
-    def Upload_image(self, calibration_index):
+        # Create a main frame to hold the two image panels side-by-side
+        main_cal_frame = ttk.Frame(self.calibrate_window)
+        main_cal_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Left Image Panel Setup
+        self.calibrate_left_panel_data = self._create_basic_image_panel(
+            main_cal_frame, "Left", include_wavelength_entry=True
+        )
+        left_upload_btn = tk.Button(self.calibrate_left_panel_data['controls_frame'], text="Upload Image 1", 
+                                     command=lambda: self.upload_image_to_panel(self.calibrate_left_panel_data))
+        left_upload_btn.pack(padx=5, pady=5)
         
+        # Right Image Panel Setup
+        self.calibrate_right_panel_data = self._create_basic_image_panel(
+            main_cal_frame, "Right", include_wavelength_entry=True
+        )
+        right_upload_btn = tk.Button(self.calibrate_right_panel_data['controls_frame'], text="Upload Image 2", 
+                                      command=lambda: self.upload_image_to_panel(self.calibrate_right_panel_data))
+        right_upload_btn.pack(padx=5, pady=5)
+
+    def open_upload_image_window(self):
+        if self.upload_image_window and self.upload_image_window.winfo_exists():
+            self.upload_image_window.lift()
+            return
+
+        self.upload_image_window = tk.Toplevel(self.window)
+        self.upload_image_window.title("Upload Image")
+        self.upload_image_window.geometry("600x600")
+
+        ax, canvas, left_panel = self._setup_single_calibration_window(
+            self.upload_image_window, 
+            "Upload Image", 
+            "Image",
+            include_wavelength_entry=False
+        )
+        
+        upload_btn = tk.Button(left_panel, text="Upload Image", 
+                               command=lambda: self.upload_image_to_panel(self.upload_image_window)) # Changed to panel for consistency
+        upload_btn.pack(padx=5, pady=5)
+
+    def upload_image_to_panel(self, panel_data_or_window):
+        """
+        Uploads an image to the specified panel or single window.
+        panel_data_or_window can be a window object (for ROI/Upload Image)
+        or a dictionary of panel data (for Calibrate 2's left/right panels).
+        """
         file_path = filedialog.askopenfilename(
             title="Select an Image",
             filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*"), ("All files", "*.*")]
@@ -136,72 +219,94 @@ class SpectrometerApp:
         if not file_path:
             return
         
-        self.cal_windows[calibration_index].lift()
+        # Determine if we're dealing with a direct window object or a panel data dictionary
+        if isinstance(panel_data_or_window, dict):
+            ax = panel_data_or_window['ax']
+            canvas = panel_data_or_window['canvas']
+            line_ref = panel_data_or_window # Pass the dictionary for dragging handlers
+            # For this specific case, lift the parent calibrate_window
+            if hasattr(self, 'calibrate_window') and self.calibrate_window.winfo_exists():
+                self.calibrate_window.lift()
+        else: # It's a direct Toplevel window object (ROI or Upload Image)
+            ax = panel_data_or_window.ax
+            canvas = panel_data_or_window.canvas
+            line_ref = panel_data_or_window # Pass the window for dragging handlers
+            panel_data_or_window.lift()
 
-        # Load image using OpenCV
+
         uploaded_image_cv = cv2.imread(file_path)
 
         if uploaded_image_cv is None:
             return
 
-        # Convert OpenCV image to RGB for matplotlib display
         image_rgb = cv2.cvtColor(uploaded_image_cv, cv2.COLOR_BGR2RGB)
 
-        # Get the axes and canvas for the current calibration window
-        ax = self.cal_windows[calibration_index].ax
-        canvas = self.cal_windows[calibration_index].canvas
-        
-        # Clear existing axes content and display the image
         ax.cla() 
         ax.imshow(image_rgb)
         
-        # Ensure axes are off again after clearing (just in case)
         ax.axis('off')
-
-        # Set aspect ratio to auto for correct image display
         ax.set_aspect('auto')
         
-        # --- Add Draggable Horizontal Line ---
-        
-        if calibration_index==1 or calibration_index==2:
-            # Check if a line already exists for this window
-            if self.cal_windows[calibration_index].line is None:        
-                # Create the horizontal line
+        # Draggable line logic
+        if isinstance(line_ref, dict): # For Calibrate 2's left/right panels
+            if line_ref['line'] is None:     
                 line = ax.axhline(y=image_rgb.shape[0] / 2.0, color='r', linestyle='-', linewidth=0.5)
-                self.cal_windows[calibration_index].line = line
+                line_ref['line'] = line # Store line reference in the dictionary
 
-                # Set up event handlers for dragging on the matplotlib canvas
-                canvas.mpl_connect('button_press_event', lambda event: self.on_press(event, calibration_index))
-                canvas.mpl_connect('button_release_event', lambda event: self.on_release(event, calibration_index))
-                canvas.mpl_connect('motion_notify_event', lambda event: self.on_motion(event, calibration_index))
+                canvas.mpl_connect('button_press_event', lambda event: self.on_press(event, line_ref))
+                canvas.mpl_connect('button_release_event', lambda event: self.on_release(event, line_ref))
+                canvas.mpl_connect('motion_notify_event', lambda event: self.on_motion(event, line_ref))
             else:
-                # If the line already exists, just make sure it's visible if the image changed
-                self.cal_windows[calibration_index].line.set_visible(True)
+                line_ref['line'].set_visible(True)
+        elif hasattr(line_ref, 'line') and line_ref.line is not None: # For single windows (ROI, Upload Image) if they ever get a line
+            line_ref.line.set_visible(True)
+        elif hasattr(line_ref, 'line') and line_ref.line is None: # For single windows that *might* have a line, but haven't created one yet
+             # This means it's not calibrate 2. ROI and Upload image windows don't have draggable lines by default.
+             # If you add draggable line to them, this part needs a similar logic as above for dict.
+             pass
 
-        # Redraw the canvas
+
         canvas.draw()
     
     # --- Matplotlib Dragging Handlers ---
 
-    def on_press(self, event, calibration_index):
+    def on_press(self, event, target_panel_data_or_window):
         """Handles mouse button press event on the matplotlib canvas."""
-        if event.inaxes != self.cal_windows[calibration_index].ax or self.cal_windows[calibration_index].line is None:
-            return
-        if self.cal_windows[calibration_index].line.contains(event)[0]:
-            self.cal_windows[calibration_index].dragging = True
+        # Determine if we're dealing with a dict (Calibrate 2 panel) or a window object (ROI/Upload Image)
+        if isinstance(target_panel_data_or_window, dict):
+            ax = target_panel_data_or_window['ax']
+            line = target_panel_data_or_window['line']
+            if event.inaxes != ax or line is None:
+                return
+            if line.contains(event)[0]:
+                target_panel_data_or_window['dragging'] = True
+        else: # It's a direct Toplevel window object
+            ax = target_panel_data_or_window.ax
+            line = target_panel_data_or_window.line
+            if event.inaxes != ax or line is None:
+                return
+            if line.contains(event)[0]:
+                target_panel_data_or_window.dragging = True
             
-    def on_release(self, event, calibration_index):
+    def on_release(self, event, target_panel_data_or_window):
         """Handles mouse button release event."""
-        self.cal_windows[calibration_index].dragging = False
+        if isinstance(target_panel_data_or_window, dict):
+            target_panel_data_or_window['dragging'] = False
+        else:
+            target_panel_data_or_window.dragging = False
 
-    def on_motion(self, event, calibration_index):
+    def on_motion(self, event, target_panel_data_or_window):
         """Handles mouse motion while dragging."""
-        if self.cal_windows[calibration_index].dragging and event.inaxes == self.cal_windows[calibration_index].ax:
-            new_y = event.ydata           
-            self.cal_windows[calibration_index].line.set_ydata([new_y, new_y]) 
-            
-            # Redraw the canvas to update the line position visually
-            self.cal_windows[calibration_index].canvas.draw()
+        if isinstance(target_panel_data_or_window, dict):
+            if target_panel_data_or_window['dragging'] and event.inaxes == target_panel_data_or_window['ax']:
+                new_y = event.ydata          
+                target_panel_data_or_window['line'].set_ydata([new_y, new_y]) 
+                target_panel_data_or_window['canvas'].draw()
+        else:
+            if target_panel_data_or_window.dragging and event.inaxes == target_panel_data_or_window.ax:
+                new_y = event.ydata          
+                target_panel_data_or_window.line.set_ydata([new_y, new_y]) 
+                target_panel_data_or_window.canvas.draw()
             
     def on_closing(self):
         plt.close('all') 
